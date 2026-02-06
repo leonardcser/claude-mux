@@ -1,0 +1,51 @@
+package tui
+
+import "github.com/charmbracelet/lipgloss"
+
+var (
+	// Tree items
+	selectedStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("8")).
+			Foreground(lipgloss.Color("15")).
+			Bold(true)
+
+	workspaceStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("15")).
+			Bold(true)
+
+	paneItemStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8"))
+
+	busyIconStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#D97706"))
+
+	attentionIconStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#9B9BF5"))
+
+	busyIconSelectedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#D97706")).
+				Background(lipgloss.Color("8"))
+
+	attentionIconSelectedStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("#9B9BF5")).
+					Background(lipgloss.Color("8"))
+
+	idleIconSelectedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("15")).
+				Background(lipgloss.Color("8"))
+
+	dimStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8"))
+
+	// Separator
+	separatorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8"))
+
+	// Help / status
+	helpStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8"))
+
+	// Error
+	errStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("1"))
+)

@@ -1,0 +1,176 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/leo/claude-mux/internal/claude"
+)
+
+// ItemKind distinguishes workspace headers from pane entries.
+type ItemKind int
+
+const (
+	KindWorkspace ItemKind = iota
+	KindPane
+)
+
+// TreeItem is one visible row in the flattened tree.
+type TreeItem struct {
+	Kind           ItemKind
+	WorkspaceIndex int
+	PaneIndex      int
+}
+
+// FlattenTree builds the visible flat list from workspaces.
+// Workspaces are always expanded; headers are non-selectable.
+func FlattenTree(workspaces []claude.Workspace) []TreeItem {
+	var items []TreeItem
+	for wi, ws := range workspaces {
+		items = append(items, TreeItem{Kind: KindWorkspace, WorkspaceIndex: wi})
+		for pi := range ws.Panes {
+			items = append(items, TreeItem{Kind: KindPane, WorkspaceIndex: wi, PaneIndex: pi})
+		}
+	}
+	return items
+}
+
+// NextPane returns the index of the next KindPane item after from, or from if none.
+func NextPane(items []TreeItem, from int) int {
+	for i := from + 1; i < len(items); i++ {
+		if items[i].Kind == KindPane {
+			return i
+		}
+	}
+	return from
+}
+
+// PrevPane returns the index of the previous KindPane item before from, or from if none.
+func PrevPane(items []TreeItem, from int) int {
+	for i := from - 1; i >= 0; i-- {
+		if items[i].Kind == KindPane {
+			return i
+		}
+	}
+	return from
+}
+
+// FirstPane returns the index of the first KindPane item, or 0 if none.
+func FirstPane(items []TreeItem) int {
+	for i, it := range items {
+		if it.Kind == KindPane {
+			return i
+		}
+	}
+	return 0
+}
+
+// FirstAttentionPane returns the index of the first pane that needs attention,
+// falling back to FirstPane if none need attention.
+func FirstAttentionPane(items []TreeItem, workspaces []claude.Workspace) int {
+	for i, it := range items {
+		if it.Kind == KindPane && workspaces[it.WorkspaceIndex].Panes[it.PaneIndex].Status == claude.StatusNeedsAttention {
+			return i
+		}
+	}
+	return FirstPane(items)
+}
+
+// RenderTreeItem renders a single row.
+func RenderTreeItem(item TreeItem, workspaces []claude.Workspace, selected bool, width int) string {
+	switch item.Kind {
+	case KindWorkspace:
+		ws := workspaces[item.WorkspaceIndex]
+		name := truncate(ws.ShortPath, width-2)
+		text := " " + name
+		text += strings.Repeat(" ", max(width-len(text), 0))
+		return workspaceStyle.Render(text)
+
+	case KindPane:
+		p := workspaces[item.WorkspaceIndex].Panes[item.PaneIndex]
+		label := fmt.Sprintf("%s:%s", p.Session, p.Window)
+		elapsed := formatElapsed(time.Since(p.LastActive))
+
+		prefix := "   "
+		right := " " + elapsed + " "
+		middle := label
+		avail := width - len(prefix) - 2 - len(right) // 2 for icon+space
+		if len(middle) > avail {
+			middle = truncate(middle, avail)
+		}
+		gap := max(avail-len(middle), 0)
+
+		if selected {
+			var icon string
+			switch p.Status {
+			case claude.StatusBusy:
+				icon = busyIconSelectedStyle.Render("●")
+			case claude.StatusNeedsAttention:
+				icon = attentionIconSelectedStyle.Render("●")
+			default:
+				icon = idleIconSelectedStyle.Render("○")
+			}
+			return selectedStyle.Render(prefix) + icon + selectedStyle.Render(" "+middle+strings.Repeat(" ", gap)+right)
+		}
+		var icon string
+		switch p.Status {
+		case claude.StatusBusy:
+			icon = busyIconStyle.Render("●")
+		case claude.StatusNeedsAttention:
+			icon = attentionIconStyle.Render("●")
+		default:
+			icon = paneItemStyle.Render("○")
+		}
+		return paneItemStyle.Render(prefix) + icon + paneItemStyle.Render(" "+middle) + dimStyle.Render(strings.Repeat(" ", gap)+right)
+	}
+	return ""
+}
+
+// truncate shortens s to maxLen, adding ellipsis if needed.
+func truncate(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
+}
+
+// formatElapsed returns a human-readable short duration string.
+func formatElapsed(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		h := int(d.Hours())
+		m := int(d.Minutes()) % 60
+		if m == 0 {
+			return fmt.Sprintf("%dh", h)
+		}
+		return fmt.Sprintf("%dh%dm", h, m)
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours())/24)
+	}
+}
+
+// VisibleSlice returns the start index for scrolling the tree view.
+func VisibleSlice(total, cursor, height int) int {
+	if total <= height {
+		return 0
+	}
+	start := 0
+	if cursor >= height {
+		start = cursor - height + 1
+	}
+	if start+height > total {
+		start = total - height
+	}
+	return start
+}

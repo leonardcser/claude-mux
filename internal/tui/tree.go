@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leo/claude-mux/internal/claude"
+	"github.com/leo/agent-mux/internal/claude"
 )
 
 // ItemKind distinguishes workspace headers from pane entries.

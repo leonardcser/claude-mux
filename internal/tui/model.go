@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/leo/claude-mux/internal/claude"
+	"github.com/leo/agent-mux/internal/claude"
 )
 
 // Messages
@@ -212,7 +212,7 @@ func (m Model) View() string {
 	}
 
 	if m.loaded && len(m.items) == 0 {
-		return helpStyle.Render("No active Claude sessions found.\nPress q to quit.")
+		return helpStyle.Render("No active sessions found.\nPress q to quit.")
 	}
 
 	listWidth := m.listWidth()

@@ -44,8 +44,8 @@ func loadProcessTable() processTable {
 
 // rawPane holds parsed tmux pane info before status detection.
 type rawPane struct {
-	target, session, window, pane, path string
-	pid                                 int
+	target, session, window, pane, path, cmd string
+	pid                                      int
 }
 
 // parseTmuxPanes parses tmux list-panes output into rawPane structs.
@@ -60,12 +60,12 @@ func parseTmuxPanes(out []byte) []rawPane {
 			continue
 		}
 		target, cmd, path, pidStr := fields[0], fields[1], fields[2], fields[3]
-		if cmd != "claude" {
+		if cmd != "claude" && cmd != "opencode" {
 			continue
 		}
 		pid, _ := strconv.Atoi(pidStr)
 		session, window, pane := parseTarget(target)
-		raw = append(raw, rawPane{target, session, window, pane, path, pid})
+		raw = append(raw, rawPane{target, session, window, pane, path, cmd, pid})
 	}
 	return raw
 }
@@ -164,20 +164,29 @@ func ListClaudePanes() ([]ClaudePane, error) {
 			Pane:       r.pane,
 			Path:       r.path,
 			PID:        r.pid,
-			Status:     detectStatus(r.pid, r.target, &pt),
+			Status:     detectStatus(r.pid, r.target, r.cmd, &pt),
 			LastActive: history[r.path],
 		}
 	}
 	return panes, nil
 }
 
-// detectStatus determines whether Claude needs attention, is busy, or is idle.
-func detectStatus(shellPID int, target string, pt *processTable) PaneStatus {
-	if needsAttention(target) {
+// detectStatus determines whether a pane needs attention, is busy, or is idle.
+// Captures pane content once and reuses it for both attention and busy checks.
+func detectStatus(shellPID int, target, cmd string, pt *processTable) PaneStatus {
+	lines := capturePaneLines(target)
+	if needsAttention(lines) {
 		return StatusNeedsAttention
 	}
-	if isClaudeBusy(shellPID, pt) {
-		return StatusBusy
+	switch cmd {
+	case "claude":
+		if isClaudeBusy(shellPID, pt) {
+			return StatusBusy
+		}
+	case "opencode":
+		if isOpenCodeBusy(lines) {
+			return StatusBusy
+		}
 	}
 	return StatusIdle
 }
@@ -198,17 +207,32 @@ func isClaudeBusy(shellPID int, pt *processTable) bool {
 	return false
 }
 
-// needsAttention checks if Claude is waiting for user interaction.
-func needsAttention(target string) bool {
+// capturePaneLines captures the last 10 visible lines of a tmux pane.
+func capturePaneLines(target string) []string {
 	out, err := exec.Command("tmux", "capture-pane", "-t", target, "-p").Output()
 	if err != nil {
-		return false
+		return nil
 	}
-	// Only inspect the last 10 lines of the visible pane.
 	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
 	if len(lines) > 10 {
 		lines = lines[len(lines)-10:]
 	}
+	return lines
+}
+
+// isOpenCodeBusy checks if Open Code is actively working by looking for its
+// loading indicator ("esc interrupt") in the last few pane lines.
+func isOpenCodeBusy(lines []string) bool {
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.Contains(lines[i], "esc interrupt") {
+			return true
+		}
+	}
+	return false
+}
+
+// needsAttention checks if a pane is waiting for user interaction.
+func needsAttention(lines []string) bool {
 	content := strings.Join(lines, "\n")
 	for _, pattern := range []string{
 		// Tool permission prompts

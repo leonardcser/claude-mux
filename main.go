@@ -5,12 +5,12 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/leo/claude-mux/internal/tui"
+	"github.com/leo/agent-mux/internal/tui"
 )
 
 func main() {
 	if os.Getenv("TMUX") == "" {
-		fmt.Fprintln(os.Stderr, "error: claude-mux must be run inside tmux")
+		fmt.Fprintln(os.Stderr, "error: agent-mux must be run inside tmux")
 		os.Exit(1)
 	}
 

@@ -1,9 +1,10 @@
-# claude-mux
+# agent-mux
 
-A TUI for multiplexing Claude Code sessions in tmux.
+A TUI for multiplexing AI coding agent sessions in tmux.
 
-Lists all active Claude panes grouped by workspace, with a live preview panel
-showing each session's output. Select a session and press enter to jump to it.
+Lists all active agent panes (Claude Code, Open Code) grouped by workspace,
+with a live preview panel showing each session's output. Select a session and
+press enter to jump to it.
 
 ## Requirements
 
@@ -21,15 +22,15 @@ go install
 From inside tmux:
 
 ```
-claude-mux
+agent-mux
 ```
 
 ### tmux binding
 
-Add to your `~/.tmux.conf` to open claude-mux with `prefix + j`:
+Add to your `~/.tmux.conf` to open agent-mux with `prefix + j`:
 
 ```tmux
-bind j run-shell "tmux neww claude-mux"
+bind j run-shell "tmux neww agent-mux"
 ```
 
 ### Keys

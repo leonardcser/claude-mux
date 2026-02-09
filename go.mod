@@ -1,4 +1,4 @@
-module github.com/leo/claude-mux
+module github.com/leo/agent-mux
 
 go 1.25.7
 

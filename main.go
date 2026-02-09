@@ -5,6 +5,7 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	_ "github.com/leo/agent-mux/internal/provider" // register all providers
 	"github.com/leo/agent-mux/internal/tui"
 )
 

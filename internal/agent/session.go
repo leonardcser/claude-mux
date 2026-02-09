@@ -1,4 +1,4 @@
-package claude
+package agent
 
 import (
 	"os"
@@ -8,17 +8,17 @@ import (
 	"time"
 )
 
-// PaneStatus represents the state of a Claude pane.
+// PaneStatus represents the state of an agent pane.
 type PaneStatus int
 
 const (
 	StatusIdle           PaneStatus = iota // waiting for user input
-	StatusBusy                             // Claude is working
-	StatusNeedsAttention                   // Claude needs user attention
+	StatusBusy                             // agent is working
+	StatusNeedsAttention                   // agent needs user attention
 )
 
-// ClaudePane represents a tmux pane running Claude.
-type ClaudePane struct {
+// Pane represents a tmux pane running an AI coding agent.
+type Pane struct {
 	Target     string // e.g. "main:2.1"
 	Session    string
 	Window     string
@@ -34,13 +34,13 @@ type Workspace struct {
 	Path      string
 	ShortPath string
 	GitBranch string
-	Panes     []ClaudePane
+	Panes     []Pane
 }
 
 // GroupByWorkspace groups panes by their working directory.
-func GroupByWorkspace(panes []ClaudePane) []Workspace {
+func GroupByWorkspace(panes []Pane) []Workspace {
 	home, _ := os.UserHomeDir()
-	groups := make(map[string][]ClaudePane)
+	groups := make(map[string][]Pane)
 	for _, p := range panes {
 		groups[p.Path] = append(groups[p.Path], p)
 	}
@@ -76,11 +76,9 @@ func gitBranch(dir string) string {
 		return ""
 	}
 	ref := strings.TrimSpace(string(data))
-	// Normal branch: "ref: refs/heads/main"
 	if branch, ok := strings.CutPrefix(ref, "ref: refs/heads/"); ok {
 		return branch
 	}
-	// Detached HEAD — return short sha
 	if len(ref) >= 8 {
 		return ref[:8]
 	}

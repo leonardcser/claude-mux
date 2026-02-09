@@ -1,4 +1,4 @@
-package claude
+package agent
 
 import (
 	"fmt"
@@ -7,40 +7,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/leo/agent-mux/internal/provider"
 )
-
-// processTable holds a snapshot of the system process tree built from a single
-// ps call, replacing per-pane pgrep invocations with in-memory lookups.
-type processTable struct {
-	children map[int][]int  // ppid -> child pids
-	comm     map[int]string // pid -> command basename
-}
-
-// loadProcessTable snapshots the process tree via a single ps call.
-func loadProcessTable() processTable {
-	pt := processTable{
-		children: make(map[int][]int),
-		comm:     make(map[int]string),
-	}
-	out, err := exec.Command("ps", "-eo", "pid,ppid,comm").Output()
-	if err != nil {
-		return pt
-	}
-	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
-		}
-		pid, err1 := strconv.Atoi(fields[0])
-		ppid, err2 := strconv.Atoi(fields[1])
-		if err1 != nil || err2 != nil {
-			continue
-		}
-		pt.children[ppid] = append(pt.children[ppid], pid)
-		pt.comm[pid] = fields[2]
-	}
-	return pt
-}
 
 // rawPane holds parsed tmux pane info before status detection.
 type rawPane struct {
@@ -60,14 +29,27 @@ func parseTmuxPanes(out []byte) []rawPane {
 			continue
 		}
 		target, cmd, path, pidStr := fields[0], fields[1], fields[2], fields[3]
-		if cmd != "claude" && cmd != "opencode" {
-			continue
-		}
 		pid, _ := strconv.Atoi(pidStr)
 		session, window, pane := parseTarget(target)
 		raw = append(raw, rawPane{target, session, window, pane, path, cmd, pid})
 	}
 	return raw
+}
+
+// resolveAgentPanes filters raw panes to only those running a registered agent.
+// Uses the process table to resolve agents that run under a generic command
+// (e.g. gemini runs as "node").
+func resolveAgentPanes(raw []rawPane, pt *provider.ProcessTable) []rawPane {
+	var agents []rawPane
+	for _, r := range raw {
+		cmd := provider.Resolve(r.cmd, r.pid, pt)
+		if cmd == "" {
+			continue
+		}
+		r.cmd = cmd
+		agents = append(agents, r)
+	}
+	return agents
 }
 
 // listTmuxPanes runs tmux list-panes and returns raw output.
@@ -76,58 +58,27 @@ func listTmuxPanes() ([]byte, error) {
 		"#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}").Output()
 }
 
-// ListClaudePanesBasic returns panes with StatusIdle (no status detection).
-// Used for instant initial display before async status detection kicks in.
-func ListClaudePanesBasic() ([]ClaudePane, error) {
-	// Run tmux list-panes and history read in parallel.
-	var (
-		tmuxOut []byte
-		tmuxErr error
-		history map[string]time.Time
-	)
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		tmuxOut, tmuxErr = listTmuxPanes()
-	}()
-	go func() {
-		defer wg.Done()
-		history = LastActiveByProject()
-	}()
-	wg.Wait()
-
-	if tmuxErr != nil {
-		return nil, fmt.Errorf("tmux list-panes: %w", tmuxErr)
-	}
-
-	raw := parseTmuxPanes(tmuxOut)
-	panes := make([]ClaudePane, len(raw))
-	for i, r := range raw {
-		panes[i] = ClaudePane{
-			Target:     r.target,
-			Session:    r.session,
-			Window:     r.window,
-			Pane:       r.pane,
-			Path:       r.path,
-			PID:        r.pid,
-			Status:     StatusIdle,
-			LastActive: history[r.path],
+// loadProcessTable snapshots the process tree via a single ps call.
+func loadProcessTable() provider.ProcessTable {
+	out, err := exec.Command("ps", "-eo", "pid,ppid,comm,args").Output()
+	if err != nil {
+		return provider.ProcessTable{
+			Children: make(map[int][]int),
+			Comm:     make(map[int]string),
+			Args:     make(map[int]string),
 		}
 	}
-	return panes, nil
+	return provider.ParseProcessTable(string(out))
 }
 
-// ListClaudePanes returns all tmux panes currently running claude with full
-// status detection. Runs tmux list-panes, history read, and process table
-// snapshot in parallel, then detects per-pane attention status concurrently.
-func ListClaudePanes() ([]ClaudePane, error) {
-	// Run tmux list-panes, history read, and process table snapshot in parallel.
+// ListPanesBasic returns panes with StatusIdle (no status detection).
+// Used for instant initial display before async status detection kicks in.
+func ListPanesBasic() ([]Pane, error) {
 	var (
 		tmuxOut []byte
 		tmuxErr error
 		history map[string]time.Time
-		pt      processTable
+		pt      provider.ProcessTable
 	)
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -149,15 +100,61 @@ func ListClaudePanes() ([]ClaudePane, error) {
 		return nil, fmt.Errorf("tmux list-panes: %w", tmuxErr)
 	}
 
-	raw := parseTmuxPanes(tmuxOut)
+	raw := resolveAgentPanes(parseTmuxPanes(tmuxOut), &pt)
+	panes := make([]Pane, len(raw))
+	for i, r := range raw {
+		panes[i] = Pane{
+			Target:     r.target,
+			Session:    r.session,
+			Window:     r.window,
+			Pane:       r.pane,
+			Path:       r.path,
+			PID:        r.pid,
+			Status:     StatusIdle,
+			LastActive: history[r.path],
+		}
+	}
+	return panes, nil
+}
 
-	// Detect status sequentially. needsAttention calls tmux capture-pane,
+// ListPanes returns all tmux panes running a registered agent with full
+// status detection. Runs tmux list-panes, history read, and process table
+// snapshot in parallel, then detects per-pane status sequentially.
+func ListPanes() ([]Pane, error) {
+	var (
+		tmuxOut []byte
+		tmuxErr error
+		history map[string]time.Time
+		pt      provider.ProcessTable
+	)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		tmuxOut, tmuxErr = listTmuxPanes()
+	}()
+	go func() {
+		defer wg.Done()
+		history = LastActiveByProject()
+	}()
+	go func() {
+		defer wg.Done()
+		pt = loadProcessTable()
+	}()
+	wg.Wait()
+
+	if tmuxErr != nil {
+		return nil, fmt.Errorf("tmux list-panes: %w", tmuxErr)
+	}
+
+	raw := resolveAgentPanes(parseTmuxPanes(tmuxOut), &pt)
+
+	// Detect status sequentially. capturePaneLines calls tmux capture-pane,
 	// and tmux serializes these internally via a server lock — concurrent
 	// calls just contend on that lock. Sequential avoids the overhead.
-	// isClaudeBusy is a pure in-memory lookup via the process table.
-	panes := make([]ClaudePane, len(raw))
+	panes := make([]Pane, len(raw))
 	for i, r := range raw {
-		panes[i] = ClaudePane{
+		panes[i] = Pane{
 			Target:     r.target,
 			Session:    r.session,
 			Window:     r.window,
@@ -173,38 +170,17 @@ func ListClaudePanes() ([]ClaudePane, error) {
 
 // detectStatus determines whether a pane needs attention, is busy, or is idle.
 // Captures pane content once and reuses it for both attention and busy checks.
-func detectStatus(shellPID int, target, cmd string, pt *processTable) PaneStatus {
+func detectStatus(shellPID int, target, cmd string, pt *provider.ProcessTable) PaneStatus {
 	lines := capturePaneLines(target)
 	if needsAttention(lines) {
 		return StatusNeedsAttention
 	}
-	switch cmd {
-	case "claude":
-		if isClaudeBusy(shellPID, pt) {
-			return StatusBusy
-		}
-	case "opencode":
-		if isOpenCodeBusy(lines) {
+	if p := provider.Get(cmd); p != nil {
+		if p.IsBusy(lines, shellPID, pt) {
 			return StatusBusy
 		}
 	}
 	return StatusIdle
-}
-
-// isClaudeBusy checks if Claude is actively working by looking for caffeinate
-// in the process tree. Uses the pre-loaded process table for pure in-memory
-// lookups instead of spawning pgrep processes.
-func isClaudeBusy(shellPID int, pt *processTable) bool {
-	for _, childPID := range pt.children[shellPID] {
-		for _, grandchildPID := range pt.children[childPID] {
-			comm := pt.comm[grandchildPID]
-			// Match basename — comm may be a full path like /usr/bin/caffeinate.
-			if comm == "caffeinate" || strings.HasSuffix(comm, "/caffeinate") {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // capturePaneLines captures the last 10 visible lines of a tmux pane.
@@ -218,17 +194,6 @@ func capturePaneLines(target string) []string {
 		lines = lines[len(lines)-10:]
 	}
 	return lines
-}
-
-// isOpenCodeBusy checks if Open Code is actively working by looking for its
-// loading indicator ("esc interrupt") in the last few pane lines.
-func isOpenCodeBusy(lines []string) bool {
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.Contains(lines[i], "esc interrupt") {
-			return true
-		}
-	}
-	return false
 }
 
 // needsAttention checks if a pane is waiting for user interaction.
@@ -273,7 +238,6 @@ func needsAttention(lines []string) bool {
 		}
 	}
 	// Check if any of the last non-empty lines ends with a question mark.
-	// This catches ad-hoc questions Claude asks that don't match explicit patterns.
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line == "" {

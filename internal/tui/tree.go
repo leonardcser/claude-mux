@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leo/agent-mux/internal/claude"
+	"github.com/leo/agent-mux/internal/agent"
 )
 
 // ItemKind distinguishes workspace headers from pane entries.
@@ -25,7 +25,7 @@ type TreeItem struct {
 
 // FlattenTree builds the visible flat list from workspaces.
 // Workspaces are always expanded; headers are non-selectable.
-func FlattenTree(workspaces []claude.Workspace) []TreeItem {
+func FlattenTree(workspaces []agent.Workspace) []TreeItem {
 	var items []TreeItem
 	for wi, ws := range workspaces {
 		items = append(items, TreeItem{Kind: KindWorkspace, WorkspaceIndex: wi})
@@ -103,9 +103,9 @@ func FirstPane(items []TreeItem) int {
 
 // FirstAttentionPane returns the index of the first pane that needs attention,
 // falling back to FirstPane if none need attention.
-func FirstAttentionPane(items []TreeItem, workspaces []claude.Workspace) int {
+func FirstAttentionPane(items []TreeItem, workspaces []agent.Workspace) int {
 	for i, it := range items {
-		if it.Kind == KindPane && workspaces[it.WorkspaceIndex].Panes[it.PaneIndex].Status == claude.StatusNeedsAttention {
+		if it.Kind == KindPane && workspaces[it.WorkspaceIndex].Panes[it.PaneIndex].Status == agent.StatusNeedsAttention {
 			return i
 		}
 	}
@@ -113,7 +113,7 @@ func FirstAttentionPane(items []TreeItem, workspaces []claude.Workspace) int {
 }
 
 // RenderTreeItem renders a single row.
-func RenderTreeItem(item TreeItem, workspaces []claude.Workspace, selected bool, width int) string {
+func RenderTreeItem(item TreeItem, workspaces []agent.Workspace, selected bool, width int) string {
 	switch item.Kind {
 	case KindWorkspace:
 		ws := workspaces[item.WorkspaceIndex]
@@ -167,9 +167,9 @@ func RenderTreeItem(item TreeItem, workspaces []claude.Workspace, selected bool,
 		if selected {
 			var icon string
 			switch p.Status {
-			case claude.StatusBusy:
+			case agent.StatusBusy:
 				icon = busyIconSelectedStyle.Render("●")
-			case claude.StatusNeedsAttention:
+			case agent.StatusNeedsAttention:
 				icon = attentionIconSelectedStyle.Render("●")
 			default:
 				icon = idleIconSelectedStyle.Render("○")
@@ -178,9 +178,9 @@ func RenderTreeItem(item TreeItem, workspaces []claude.Workspace, selected bool,
 		}
 		var icon string
 		switch p.Status {
-		case claude.StatusBusy:
+		case agent.StatusBusy:
 			icon = busyIconStyle.Render("●")
-		case claude.StatusNeedsAttention:
+		case agent.StatusNeedsAttention:
 			icon = attentionIconStyle.Render("●")
 		default:
 			icon = paneItemStyle.Render("○")

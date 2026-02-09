@@ -7,12 +7,12 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/leo/agent-mux/internal/claude"
+	"github.com/leo/agent-mux/internal/agent"
 )
 
 // Messages
 type panesLoadedMsg struct {
-	panes []claude.ClaudePane
+	panes []agent.Pane
 	err   error
 }
 
@@ -39,13 +39,13 @@ func panesTickCmd() tea.Cmd {
 
 // Commands
 func loadPanes() tea.Msg {
-	panes, err := claude.ListClaudePanes()
+	panes, err := agent.ListPanes()
 	return panesLoadedMsg{panes: panes, err: err}
 }
 
 func loadPreview(target string) tea.Cmd {
 	return func() tea.Msg {
-		content, err := claude.CapturePane(target, 50)
+		content, err := agent.CapturePane(target, 50)
 		if err != nil {
 			content = "error: " + err.Error()
 		}
@@ -55,7 +55,7 @@ func loadPreview(target string) tea.Cmd {
 
 // Model is the top-level Bubble Tea model.
 type Model struct {
-	workspaces         []claude.Workspace
+	workspaces         []agent.Workspace
 	items              []TreeItem
 	cursor             int
 	preview            viewport.Model
@@ -78,12 +78,12 @@ func NewModel() Model {
 	m := Model{
 		preview: viewport.New(40, 20),
 	}
-	panes, err := claude.ListClaudePanesBasic()
+	panes, err := agent.ListPanesBasic()
 	m.loaded = true
 	if err != nil {
 		m.err = err
 	} else {
-		m.workspaces = claude.GroupByWorkspace(panes)
+		m.workspaces = agent.GroupByWorkspace(panes)
 		m.items = FlattenTree(m.workspaces)
 		m.cursor = FirstPane(m.items)
 	}
@@ -114,7 +114,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		firstStatus := !m.statusLoaded
 		m.statusLoaded = true
-		m.workspaces = claude.GroupByWorkspace(msg.panes)
+		m.workspaces = agent.GroupByWorkspace(msg.panes)
 		m.items = FlattenTree(m.workspaces)
 		if firstStatus {
 			m.cursor = FirstAttentionPane(m.items, m.workspaces)
@@ -230,7 +230,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if m.cursor >= 0 && m.cursor < len(m.items) && m.items[m.cursor].Kind == KindPane {
 				pane := m.workspaces[m.items[m.cursor].WorkspaceIndex].Panes[m.items[m.cursor].PaneIndex]
-				_ = claude.SwitchToPane(pane.Target)
+				_ = agent.SwitchToPane(pane.Target)
 				return m, tea.Quit
 			}
 
@@ -306,7 +306,7 @@ func (m Model) killCurrentPane() tea.Cmd {
 	}
 	target := m.workspaces[item.WorkspaceIndex].Panes[item.PaneIndex].Target
 	return func() tea.Msg {
-		return paneKilledMsg{err: claude.KillPane(target)}
+		return paneKilledMsg{err: agent.KillPane(target)}
 	}
 }
 

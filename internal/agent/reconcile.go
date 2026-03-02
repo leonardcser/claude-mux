@@ -1,7 +1,7 @@
 package agent
 
-// StatusOverride captures a user-toggled status that persists until the pane
-// produces new output.
+// StatusOverride captures a user-toggled status. Unread overrides persist
+// through content changes (manual bookmark); others clear on new output.
 type StatusOverride struct {
 	Status      PaneStatus
 	ContentHash string
@@ -11,8 +11,7 @@ type StatusOverride struct {
 //
 //	Idle → Busy (content changed)
 //	Busy → Idle (content settled + user viewing window)
-//	Busy → Unread (content settled + user on different window)
-//	Busy → NeedsAttention (heuristic match)
+//	Busy → NeedsAttention (content settled + user not viewing, or heuristic match)
 //	* → NeedsAttention (heuristic match, when not busy)
 //
 // Both the TUI and the background watch daemon use this.
@@ -58,14 +57,20 @@ func (r *Reconciler) Status(target string) PaneStatus {
 	return StatusIdle
 }
 
-// SetOverride records a user-toggled status that sticks until the pane
-// produces new output.
+// SetOverride records a user-toggled status. Unread overrides persist through
+// content changes; others clear on new output.
 func (r *Reconciler) SetOverride(target string, status PaneStatus, contentHash string) {
 	r.overrides[target] = StatusOverride{
 		Status:      status,
 		ContentHash: contentHash,
 	}
 	r.prevStatuses[target] = status
+}
+
+// HasOverride reports whether target has an active user-set override.
+func (r *Reconciler) HasOverride(target string) bool {
+	_, ok := r.overrides[target]
+	return ok
 }
 
 // ClearTarget removes all tracking state for a pane (used when marking as read).
@@ -87,7 +92,7 @@ func (r *Reconciler) Reconcile(panes []Pane) {
 		contentChanged := p.ContentHash != "" && p.ContentHash != r.prevContent[p.Target]
 
 		if ov, ok := r.overrides[p.Target]; ok {
-			if contentChanged {
+			if contentChanged && ov.Status != StatusUnread {
 				delete(r.overrides, p.Target)
 			} else {
 				p.Status = ov.Status
@@ -134,14 +139,10 @@ func (r *Reconciler) Reconcile(panes []Pane) {
 }
 
 // MergeOverrides picks up overrides written by another process (e.g., the TUI
-// writing an override that the watch daemon should respect). Only new overrides
-// are absorbed — existing ones are left untouched.
+// writing an override that the watch daemon should respect).
 func (r *Reconciler) MergeOverrides(state State) {
 	for _, cp := range state.Panes {
 		if cp.StatusOverride == nil {
-			continue
-		}
-		if _, exists := r.overrides[cp.Target]; exists {
 			continue
 		}
 		ov := StatusOverride{

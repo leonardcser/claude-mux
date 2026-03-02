@@ -382,7 +382,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if p := m.resolvePane(m.cursor); p != nil {
 			switch p.Status {
 			case agent.StatusIdle:
-				p.Status = agent.StatusNeedsAttention
+				p.Status = agent.StatusUnread
 			case agent.StatusNeedsAttention, agent.StatusUnread:
 				p.Status = agent.StatusIdle
 			default:
@@ -448,7 +448,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter", "q", "esc", "ctrl+c":
 		if key == "enter" {
 			if p := m.resolvePane(m.cursor); p != nil {
-				if p.Status == agent.StatusUnread {
+				if p.Status == agent.StatusUnread && !m.reconciler.HasOverride(p.Target) {
 					p.Status = agent.StatusIdle
 					m.reconciler.SetOverride(p.Target, agent.StatusIdle, p.ContentHash)
 				}

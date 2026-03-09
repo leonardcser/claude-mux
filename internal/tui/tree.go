@@ -268,7 +268,7 @@ func truncate(s string, maxLen int) string {
 	if maxLen <= 3 {
 		return s[:maxLen]
 	}
-	return s[:maxLen-3] + "..."
+	return s[:maxLen-3] + "…"
 }
 
 // formatElapsed returns a human-readable short duration string.

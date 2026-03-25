@@ -59,6 +59,8 @@ func Watch(ctx context.Context) error {
 			// Reconcile and re-applying them would undo cleared overrides.
 			fresh, _ := LoadState()
 			r.MergeNewOverrides(state, fresh)
+			state.LastPosition = fresh.LastPosition
+			state.SidebarWidth = fresh.SidebarWidth
 			stashed := make(map[string]bool, len(fresh.Panes))
 			for _, cp := range fresh.Panes {
 				if cp.Stashed {

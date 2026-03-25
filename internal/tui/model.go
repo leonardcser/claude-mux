@@ -90,10 +90,10 @@ type Model struct {
 
 func NewModel(tmuxSession string) Model {
 	m := Model{
-		preview:    viewport.New(40, 20),
+		preview:     viewport.New(40, 20),
 		tmuxSession: tmuxSession,
-		panes:      make(map[string]*agent.Pane),
-		reconciler: agent.NewReconciler(),
+		panes:       make(map[string]*agent.Pane),
+		reconciler:  agent.NewReconciler(),
 	}
 
 	state, stateOK := agent.LoadState()

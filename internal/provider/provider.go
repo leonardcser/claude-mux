@@ -15,7 +15,7 @@ type ProcessTable struct {
 var registry = map[string]bool{}
 
 func init() {
-	for _, cmd := range []string{"agent", "claude", "codex", "gemini", "opencode"} {
+	for _, cmd := range []string{"smelt", "claude", "codex", "gemini", "opencode"} {
 		Register(cmd)
 	}
 }

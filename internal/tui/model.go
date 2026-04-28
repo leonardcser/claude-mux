@@ -199,21 +199,21 @@ func (m *Model) rebuildItems() {
 		return sorted[i].Target < sorted[j].Target
 	})
 
-	// Count distinct paths per (stashed, project) bucket so we know whether
-	// to draw the grouped layout.
+	// A project is "grouped" if any of its panes lives outside the main
+	// repo (i.e. in a worktree). The decision is global so that stashing
+	// only the worktree pane still keeps the project-name header instead of
+	// collapsing to the worktree's basename.
+	groupedProjects := make(map[string]bool)
+	for _, p := range sorted {
+		if p.ProjectRoot != "" && p.Path != p.ProjectRoot {
+			groupedProjects[projectKey(p)] = true
+		}
+	}
+
 	type bucketKey struct {
 		stashed bool
 		project string
 	}
-	pathsPerBucket := make(map[bucketKey]map[string]struct{})
-	for _, p := range sorted {
-		k := bucketKey{p.Stashed, projectKey(p)}
-		if pathsPerBucket[k] == nil {
-			pathsPerBucket[k] = make(map[string]struct{})
-		}
-		pathsPerBucket[k][p.Path] = struct{}{}
-	}
-
 	var items []TreeItem
 	var prevBucket bucketKey
 	prevPath := ""
@@ -231,7 +231,7 @@ func (m *Model) rebuildItems() {
 			prevPath = ""
 		}
 
-		grouped := len(pathsPerBucket[bk]) > 1
+		grouped := groupedProjects[projectKey(p)]
 		if first || bk != prevBucket {
 			if grouped {
 				items = append(items, TreeItem{Kind: KindProjectGroup, PaneID: p.PaneID})

@@ -5,8 +5,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/leo/agent-mux/internal/agent"
 )
+
+// dw returns the display width of s, accounting for ANSI escapes and wide
+// runes. Use this instead of len() whenever doing column math on rendered
+// content; len() returns bytes and silently drifts on multibyte runes.
+func dw(s string) int { return lipgloss.Width(s) }
 
 // ItemKind distinguishes workspace headers from pane entries.
 type ItemKind int
@@ -15,6 +21,7 @@ const (
 	KindWorkspace ItemKind = iota
 	KindPane
 	KindSectionHeader
+	KindProjectGroup
 )
 
 // TreeItem is one visible row in the flattened tree.
@@ -22,6 +29,7 @@ type TreeItem struct {
 	Kind        ItemKind
 	PaneID      string // stable tmux pane id (KindPane) or first pane id in workspace (KindWorkspace)
 	HeaderTitle string // for KindSectionHeader
+	InGroup     bool   // KindPane: pane lives under a multi-worktree project header
 }
 
 // NextPane returns the index of the next KindPane item after from, wrapping around if none.
@@ -158,7 +166,7 @@ func (m Model) renderTreeItem(item TreeItem, selected bool, width int) string {
 			return ""
 		}
 		label := " " + item.HeaderTitle + " "
-		lineLen := max(width-len(label)-1, 0)
+		lineLen := max(width-dw(label)-1, 0)
 		return stashedSectionStyle.Render("─" + label + strings.Repeat("─", lineLen))
 	}
 
@@ -170,24 +178,29 @@ func (m Model) renderTreeItem(item TreeItem, selected bool, width int) string {
 	switch item.Kind {
 	case KindWorkspace:
 		return renderWorkspaceHeader(p, width)
+	case KindProjectGroup:
+		return renderProjectGroupHeader(p, width)
 	case KindPane:
-		return renderPaneRow(p, selected, width)
+		return renderPaneRow(p, selected, width, item.InGroup)
 	}
 	return ""
 }
 
-func renderWorkspaceHeader(p *agent.Pane, width int) string {
-	avail := width - 2
-	name := p.ShortPath
-	branch := p.GitBranch
-	if branch != "" && p.GitDirty {
+func renderProjectGroupHeader(p *agent.Pane, width int) string {
+	name := p.ProjectShort
+	if name == "" {
+		name = p.ShortPath
+	}
+	branch := p.ProjectBranch
+	if branch != "" && p.ProjectDirty {
 		branch += "*"
 	}
 
+	avail := width - 2
 	if branch != "" {
-		needed := len(name) + 1 + len(branch)
+		needed := dw(name) + 1 + dw(branch)
 		if needed > avail {
-			branchAvail := avail - len(name) - 1
+			branchAvail := avail - dw(name) - 1
 			if branchAvail >= 4 {
 				branch = truncate(branch, branchAvail)
 			} else {
@@ -203,33 +216,98 @@ func renderWorkspaceHeader(p *agent.Pane, width int) string {
 
 	text := " " + name
 	if branch != "" {
-		pad := max(width-len(text)-len(branch)-1, 0)
+		pad := max(width-dw(text)-dw(branch)-1, 0)
 		text += strings.Repeat(" ", pad)
 		return workspaceStyle.Render(text) + branchStyle.Render(branch) + branchStyle.Render(" ")
 	}
-	text += strings.Repeat(" ", max(width-len(text), 0))
+	text += strings.Repeat(" ", max(width-dw(text), 0))
 	return workspaceStyle.Render(text)
 }
 
-func renderPaneRow(p *agent.Pane, selected bool, width int) string {
-	var label string
-	if p.WindowName != "" {
-		label = fmt.Sprintf("%s:%s", p.Window, p.WindowName)
+func renderWorkspaceHeader(p *agent.Pane, width int) string {
+	avail := width - 2
+	name := p.ShortPath
+	branch := p.GitBranch
+	if branch != "" && p.GitDirty {
+		branch += "*"
+	}
+
+	if branch != "" {
+		needed := dw(name) + 1 + dw(branch)
+		if needed > avail {
+			branchAvail := avail - dw(name) - 1
+			if branchAvail >= 4 {
+				branch = truncate(branch, branchAvail)
+			} else {
+				branch = ""
+			}
+		}
+		if branch == "" {
+			name = truncate(name, avail)
+		}
 	} else {
-		label = fmt.Sprintf("%s:%s", p.Session, p.Window)
+		name = truncate(name, avail)
+	}
+
+	text := " " + name
+	if branch != "" {
+		pad := max(width-dw(text)-dw(branch)-1, 0)
+		text += strings.Repeat(" ", pad)
+		return workspaceStyle.Render(text) + branchStyle.Render(branch) + branchStyle.Render(" ")
+	}
+	text += strings.Repeat(" ", max(width-dw(text), 0))
+	return workspaceStyle.Render(text)
+}
+
+func renderPaneRow(p *agent.Pane, selected bool, width int, inGroup bool) string {
+	var winLabel string
+	if p.WindowName != "" {
+		winLabel = fmt.Sprintf("%s:%s", p.Window, p.WindowName)
+	} else {
+		winLabel = fmt.Sprintf("%s:%s", p.Session, p.Window)
+	}
+
+	// Worktree label: dim, only for actual worktrees (Path != ProjectRoot).
+	worktree := ""
+	if inGroup && p.ShortPath != "" && p.Path != p.ProjectRoot {
+		worktree = p.ShortPath
+	}
+
+	// Timer column has a fixed width so the right edge stays aligned across
+	// busy rows (no timer) and idle rows. formatElapsed uses a single unit,
+	// max " 999s "-ish; 5 cols covers the common case.
+	const elapsedSlotW = 5
+	elapsedRendered := strings.Repeat(" ", elapsedSlotW)
+	if !p.LastActive.IsZero() && p.Status != agent.StatusBusy {
+		v := " " + formatElapsed(time.Since(p.LastActive)) + " "
+		if dw(v) > elapsedSlotW {
+			v = truncate(v, elapsedSlotW)
+		}
+		elapsedRendered = strings.Repeat(" ", elapsedSlotW-dw(v)) + v
 	}
 
 	prefix := "   "
-	right := ""
-	if !p.LastActive.IsZero() && p.Status != agent.StatusBusy {
-		right = " " + formatElapsed(time.Since(p.LastActive)) + " "
+	middleAvail := width - dw(prefix) - 2 - elapsedSlotW // 2 = icon cell + leading space
+
+	// window:idx is always shown in full; truncate as a last resort if
+	// somehow wider than the available middle.
+	if dw(winLabel) > middleAvail {
+		winLabel = truncate(winLabel, middleAvail)
 	}
-	middle := label
-	avail := width - len(prefix) - 2 - len(right)
-	if len(middle) > avail {
-		middle = truncate(middle, avail)
+	remaining := middleAvail - dw(winLabel)
+
+	// Worktree name takes whatever space is left after the window label, but
+	// reserves room for a 2-space separator. If too tight, drop it.
+	worktreeRendered := ""
+	if worktree != "" && remaining >= 4 {
+		sepW := 2
+		avail := remaining - sepW
+		if dw(worktree) > avail {
+			worktree = truncate(worktree, avail)
+		}
+		worktreeRendered = strings.Repeat(" ", sepW) + worktree
 	}
-	gap := max(avail-len(middle), 0)
+	gap := max(remaining-dw(worktreeRendered), 0)
 
 	icons := normalIcons
 	if selected {
@@ -249,12 +327,16 @@ func renderPaneRow(p *agent.Pane, selected bool, width int) string {
 	}
 
 	if selected {
-		return selectedStyle.Render(prefix) + icon + selectedStyle.Render(" "+middle+strings.Repeat(" ", gap)+right)
+		body := " " + winLabel + worktreeRendered + strings.Repeat(" ", gap) + elapsedRendered
+		return selectedStyle.Render(prefix) + icon + selectedStyle.Render(body)
 	}
-	if p.Stashed {
-		return icons.text.Render(prefix) + icon + icons.text.Render(" "+middle) + icons.dim.Render(strings.Repeat(" ", gap)+right)
+
+	line := icons.text.Render(prefix) + icon + icons.text.Render(" "+winLabel)
+	if worktreeRendered != "" {
+		line += icons.dim.Render(worktreeRendered)
 	}
-	return icons.text.Render(prefix) + icon + icons.text.Render(" "+middle) + icons.dim.Render(strings.Repeat(" ", gap)+right)
+	line += icons.dim.Render(strings.Repeat(" ", gap) + elapsedRendered)
+	return line
 }
 
 // truncate shortens s to maxLen, adding ellipsis if needed.
@@ -271,7 +353,7 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "…"
 }
 
-// formatElapsed returns a human-readable short duration string.
+// formatElapsed returns a compact duration string using a single unit.
 func formatElapsed(d time.Duration) string {
 	switch {
 	case d < time.Minute:
@@ -279,12 +361,7 @@ func formatElapsed(d time.Duration) string {
 	case d < time.Hour:
 		return fmt.Sprintf("%dm", int(d.Minutes()))
 	case d < 24*time.Hour:
-		h := int(d.Hours())
-		m := int(d.Minutes()) % 60
-		if m == 0 {
-			return fmt.Sprintf("%dh", h)
-		}
-		return fmt.Sprintf("%dh%dm", h, m)
+		return fmt.Sprintf("%dh", int(d.Hours()))
 	default:
 		return fmt.Sprintf("%dd", int(d.Hours())/24)
 	}

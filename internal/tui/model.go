@@ -101,13 +101,15 @@ func NewModel(tmuxSession string) Model {
 	m.sidebarWidth = state.SidebarWidth
 	if stateOK {
 		m.reconciler.SeedFromState(state)
+		panes := make([]agent.Pane, 0, len(state.Panes))
+		lastActive := make(map[string]time.Time, len(state.Panes))
 		for _, cp := range state.Panes {
 			id := cp.PaneID
 			if id == "" {
 				id = cp.Target // backward compat with old state files
 			}
 			session, window, pane := agent.ParseTarget(cp.Target)
-			p := &agent.Pane{
+			panes = append(panes, agent.Pane{
 				PaneID:     id,
 				Target:     cp.Target,
 				Session:    session,
@@ -115,16 +117,23 @@ func NewModel(tmuxSession string) Model {
 				WindowName: cp.WindowName,
 				Pane:       pane,
 				Path:       cp.Path,
-				ShortPath:  cp.ShortPath,
-				GitBranch:  cp.GitBranch,
-				GitDirty:   cp.GitDirty,
 				Stashed:    cp.Stashed,
-			}
+			})
 			if cp.LastActive != nil {
-				p.LastActive = *cp.LastActive
+				lastActive[id] = *cp.LastActive
 			}
-			p.Status = m.reconciler.Status(id)
-			m.panes[id] = p
+		}
+		// Re-enrich from disk so the first paint matches what the live tick
+		// will produce; otherwise old caches (missing ProjectRoot, stale
+		// worktree branches) cause a visible reshuffle on first refresh.
+		agent.EnrichPanes(panes)
+		for i := range panes {
+			p := &panes[i]
+			p.Status = m.reconciler.Status(p.PaneID)
+			if t, ok := lastActive[p.PaneID]; ok {
+				p.LastActive = t
+			}
+			m.panes[p.PaneID] = p
 		}
 		m.loaded = true
 	} else {
@@ -162,15 +171,27 @@ func NewModel(tmuxSession string) Model {
 }
 
 // rebuildItems builds the flat display list from the pane map.
-// Sorts by (stashed, path, target) and inserts workspace headers.
+// Sorts by (stashed, projectRoot, path, target) and inserts project / worktree
+// headers. A project with multiple worktrees gets a project group header
+// followed by per-worktree subheaders; single-path projects get the original
+// flat workspace header.
 func (m *Model) rebuildItems() {
 	sorted := make([]*agent.Pane, 0, len(m.panes))
 	for _, p := range m.panes {
 		sorted = append(sorted, p)
 	}
+	projectKey := func(p *agent.Pane) string {
+		if p.ProjectRoot != "" {
+			return p.ProjectRoot
+		}
+		return p.Path
+	}
 	sort.Slice(sorted, func(i, j int) bool {
 		if sorted[i].Stashed != sorted[j].Stashed {
 			return !sorted[i].Stashed
+		}
+		if ki, kj := projectKey(sorted[i]), projectKey(sorted[j]); ki != kj {
+			return ki < kj
 		}
 		if sorted[i].Path != sorted[j].Path {
 			return sorted[i].Path < sorted[j].Path
@@ -178,23 +199,52 @@ func (m *Model) rebuildItems() {
 		return sorted[i].Target < sorted[j].Target
 	})
 
+	// Count distinct paths per (stashed, project) bucket so we know whether
+	// to draw the grouped layout.
+	type bucketKey struct {
+		stashed bool
+		project string
+	}
+	pathsPerBucket := make(map[bucketKey]map[string]struct{})
+	for _, p := range sorted {
+		k := bucketKey{p.Stashed, projectKey(p)}
+		if pathsPerBucket[k] == nil {
+			pathsPerBucket[k] = make(map[string]struct{})
+		}
+		pathsPerBucket[k][p.Path] = struct{}{}
+	}
+
 	var items []TreeItem
+	var prevBucket bucketKey
 	prevPath := ""
 	inStashed := false
+	first := true
 	for _, p := range sorted {
+		bk := bucketKey{p.Stashed, projectKey(p)}
 		if p.Stashed && !inStashed {
 			inStashed = true
-			prevPath = ""
 			items = append(items,
 				TreeItem{Kind: KindSectionHeader},
 				TreeItem{Kind: KindSectionHeader, HeaderTitle: "stashed"},
 			)
+			prevBucket = bucketKey{}
+			prevPath = ""
 		}
-		if p.Path != prevPath {
+
+		grouped := len(pathsPerBucket[bk]) > 1
+		if first || bk != prevBucket {
+			if grouped {
+				items = append(items, TreeItem{Kind: KindProjectGroup, PaneID: p.PaneID})
+			}
+			prevBucket = bk
+			prevPath = ""
+			first = false
+		}
+		if !grouped && p.Path != prevPath {
 			prevPath = p.Path
 			items = append(items, TreeItem{Kind: KindWorkspace, PaneID: p.PaneID})
 		}
-		items = append(items, TreeItem{Kind: KindPane, PaneID: p.PaneID})
+		items = append(items, TreeItem{Kind: KindPane, PaneID: p.PaneID, InGroup: grouped})
 	}
 	m.items = items
 }

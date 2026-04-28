@@ -14,6 +14,10 @@ type CachedPane struct {
 	WindowName     string     `json:"windowName,omitempty"`
 	Path           string     `json:"path"`
 	ShortPath      string     `json:"shortPath"`
+	ProjectRoot    string     `json:"projectRoot,omitempty"`
+	ProjectShort   string     `json:"projectShort,omitempty"`
+	ProjectBranch  string     `json:"projectBranch,omitempty"`
+	ProjectDirty   bool       `json:"projectDirty,omitempty"`
 	GitBranch      string     `json:"gitBranch,omitempty"`
 	GitDirty       bool       `json:"gitDirty,omitempty"`
 	Stashed        bool       `json:"stashed"`
@@ -92,14 +96,18 @@ func CachePanes(panes []*Pane) []CachedPane {
 	cached := make([]CachedPane, len(panes))
 	for i, p := range panes {
 		cp := CachedPane{
-			PaneID:     p.PaneID,
-			Target:     p.Target,
-			WindowName: p.WindowName,
-			Path:       p.Path,
-			ShortPath:  p.ShortPath,
-			GitBranch:  p.GitBranch,
-			GitDirty:   p.GitDirty,
-			Stashed:    p.Stashed,
+			PaneID:        p.PaneID,
+			Target:        p.Target,
+			WindowName:    p.WindowName,
+			Path:          p.Path,
+			ShortPath:     p.ShortPath,
+			ProjectRoot:   p.ProjectRoot,
+			ProjectShort:  p.ProjectShort,
+			ProjectBranch: p.ProjectBranch,
+			ProjectDirty:  p.ProjectDirty,
+			GitBranch:     p.GitBranch,
+			GitDirty:      p.GitDirty,
+			Stashed:       p.Stashed,
 		}
 		if !p.LastActive.IsZero() {
 			t := p.LastActive

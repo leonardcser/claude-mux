@@ -29,6 +29,10 @@ type Pane struct {
 	Pane               string
 	Path               string
 	ShortPath          string
+	ProjectRoot        string // main repo path; equals Path when not a worktree
+	ProjectShort       string // basename of ProjectRoot
+	ProjectBranch      string // branch of ProjectRoot
+	ProjectDirty       bool   // dirty state of ProjectRoot
 	GitBranch          string
 	GitDirty           bool
 	PID                int
@@ -40,27 +44,34 @@ type Pane struct {
 	Stashed            bool
 }
 
-// EnrichPanes populates workspace metadata (ShortPath, GitBranch, GitDirty) on each pane.
-// Metadata is computed once per unique path.
+// EnrichPanes populates workspace metadata (ShortPath, GitBranch, GitDirty,
+// ProjectRoot, ProjectShort) on each pane. Metadata is computed once per
+// unique path.
 func EnrichPanes(panes []Pane) {
 	home, _ := os.UserHomeDir()
+	shorten := func(p string) string {
+		short := filepath.Base(p)
+		if short == "." || short == "/" {
+			short = p
+			if home != "" && strings.HasPrefix(short, home) {
+				short = "~" + strings.TrimPrefix(short, home)
+			}
+		}
+		return short
+	}
+
 	type wsInfo struct {
-		ShortPath string
-		GitBranch string
-		GitDirty  bool
+		ShortPath    string
+		ProjectRoot  string
+		ProjectShort string
+		GitBranch    string
+		GitDirty     bool
 	}
 
 	unique := make(map[string]*wsInfo)
 	for i := range panes {
 		if _, ok := unique[panes[i].Path]; !ok {
-			short := filepath.Base(panes[i].Path)
-			if short == "." || short == "/" {
-				short = panes[i].Path
-				if home != "" && strings.HasPrefix(short, home) {
-					short = "~" + strings.TrimPrefix(short, home)
-				}
-			}
-			unique[panes[i].Path] = &wsInfo{ShortPath: short}
+			unique[panes[i].Path] = &wsInfo{ShortPath: shorten(panes[i].Path)}
 		}
 	}
 
@@ -71,22 +82,121 @@ func EnrichPanes(panes []Pane) {
 			defer wg.Done()
 			info.GitBranch = gitBranch(path)
 			info.GitDirty = gitDirty(path)
+			root := projectRoot(path)
+			info.ProjectRoot = root
+			info.ProjectShort = shorten(root)
 		}(path, info)
 	}
 	wg.Wait()
 
+	// Resolve branch/dirty for each unique project root (parallel) so the
+	// project header can show the main-repo branch even when no pane lives
+	// at the root path.
+	type projInfo struct {
+		Branch string
+		Dirty  bool
+	}
+	projects := make(map[string]*projInfo)
+	for _, info := range unique {
+		if _, ok := projects[info.ProjectRoot]; !ok {
+			projects[info.ProjectRoot] = &projInfo{}
+		}
+	}
+	var pwg sync.WaitGroup
+	for root, pi := range projects {
+		pwg.Add(1)
+		go func(root string, pi *projInfo) {
+			defer pwg.Done()
+			pi.Branch = gitBranch(root)
+			pi.Dirty = gitDirty(root)
+		}(root, pi)
+	}
+	pwg.Wait()
+
 	for i := range panes {
 		info := unique[panes[i].Path]
 		panes[i].ShortPath = info.ShortPath
+		panes[i].ProjectRoot = info.ProjectRoot
+		panes[i].ProjectShort = info.ProjectShort
 		panes[i].GitBranch = info.GitBranch
 		panes[i].GitDirty = info.GitDirty
+		if pi := projects[info.ProjectRoot]; pi != nil {
+			panes[i].ProjectBranch = pi.Branch
+			panes[i].ProjectDirty = pi.Dirty
+		}
 	}
 }
 
-// gitBranch returns the current git branch by reading .git/HEAD directly,
+// projectRoot returns the main repo path for dir. If dir is a git worktree
+// (i.e. <dir>/.git is a file), the main repo is parsed from its gitdir
+// pointer. Otherwise dir itself is returned.
+func projectRoot(dir string) string {
+	gitPath := filepath.Join(dir, ".git")
+	info, err := os.Lstat(gitPath)
+	if err != nil {
+		return dir
+	}
+	if info.IsDir() {
+		return dir
+	}
+	data, err := os.ReadFile(gitPath)
+	if err != nil {
+		return dir
+	}
+	line := strings.TrimSpace(string(data))
+	gitdir, ok := strings.CutPrefix(line, "gitdir:")
+	if !ok {
+		return dir
+	}
+	gitdir = strings.TrimSpace(gitdir)
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(dir, gitdir)
+	}
+	gitdir = filepath.Clean(gitdir)
+	// Expect <main>/.git/worktrees/<name>; strip the trailing two segments
+	// plus the .git component to recover <main>.
+	parent := filepath.Dir(filepath.Dir(gitdir))
+	if filepath.Base(parent) != ".git" {
+		return dir
+	}
+	return filepath.Dir(parent)
+}
+
+// resolveGitDir returns the directory containing HEAD/index for dir. For a
+// regular repo this is <dir>/.git; for a worktree this is the path the
+// worktree's .git file points to. Returns "" if dir is not a git repo.
+func resolveGitDir(dir string) string {
+	gitPath := filepath.Join(dir, ".git")
+	info, err := os.Lstat(gitPath)
+	if err != nil {
+		return ""
+	}
+	if info.IsDir() {
+		return gitPath
+	}
+	data, err := os.ReadFile(gitPath)
+	if err != nil {
+		return ""
+	}
+	gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
+	if !ok {
+		return ""
+	}
+	gitdir = strings.TrimSpace(gitdir)
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(dir, gitdir)
+	}
+	return filepath.Clean(gitdir)
+}
+
+// gitBranch returns the current git branch by reading HEAD directly,
 // avoiding a process spawn. Returns "" if not a git repo or on any error.
 func gitBranch(dir string) string {
-	data, err := os.ReadFile(filepath.Join(dir, ".git", "HEAD"))
+	gitdir := resolveGitDir(dir)
+	if gitdir == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(gitdir, "HEAD"))
 	if err != nil {
 		return ""
 	}
@@ -116,10 +226,13 @@ func init() {
 }
 
 // gitDirty returns true if the git working tree has uncommitted changes.
-// Results are cached and only recomputed when .git/index mtime changes.
+// Results are cached and only recomputed when index mtime changes.
 func gitDirty(dir string) bool {
-	indexPath := filepath.Join(dir, ".git", "index")
-	info, err := os.Stat(indexPath)
+	gitdir := resolveGitDir(dir)
+	if gitdir == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(gitdir, "index"))
 	if err != nil {
 		return false
 	}

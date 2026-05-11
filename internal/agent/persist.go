@@ -21,6 +21,7 @@ type CachedPane struct {
 	GitBranch      string     `json:"gitBranch,omitempty"`
 	GitDirty       bool       `json:"gitDirty,omitempty"`
 	Stashed        bool       `json:"stashed"`
+	Provider       string     `json:"provider,omitempty"`
 	StatusOverride *int       `json:"statusOverride,omitempty"`
 	ContentHash    string     `json:"contentHash,omitempty"`
 	LastStatus     *int       `json:"lastStatus,omitempty"`
@@ -108,6 +109,7 @@ func CachePanes(panes []*Pane) []CachedPane {
 			GitBranch:     p.GitBranch,
 			GitDirty:      p.GitDirty,
 			Stashed:       p.Stashed,
+			Provider:      p.Provider,
 		}
 		if !p.LastActive.IsZero() {
 			t := p.LastActive

@@ -29,7 +29,6 @@ type TreeItem struct {
 	Kind        ItemKind
 	PaneID      string // stable tmux pane id (KindPane) or first pane id in workspace (KindWorkspace)
 	HeaderTitle string // for KindSectionHeader
-	InGroup     bool   // KindPane: pane lives under a multi-worktree project header
 }
 
 // NextPane returns the index of the next KindPane item after from, wrapping around if none.
@@ -181,7 +180,7 @@ func (m Model) renderTreeItem(item TreeItem, selected bool, width int) string {
 	case KindProjectGroup:
 		return renderProjectGroupHeader(p, width)
 	case KindPane:
-		return renderPaneRow(p, selected, width, item.InGroup)
+		return m.renderPaneRow(p, selected, width)
 	}
 	return ""
 }
@@ -259,7 +258,7 @@ func renderWorkspaceHeader(p *agent.Pane, width int) string {
 	return workspaceStyle.Render(text)
 }
 
-func renderPaneRow(p *agent.Pane, selected bool, width int, inGroup bool) string {
+func (m Model) renderPaneRow(p *agent.Pane, selected bool, width int) string {
 	var winLabel string
 	if p.WindowName != "" {
 		winLabel = fmt.Sprintf("%s:%s", p.Window, p.WindowName)
@@ -269,7 +268,7 @@ func renderPaneRow(p *agent.Pane, selected bool, width int, inGroup bool) string
 
 	// Worktree label: dim, only for actual worktrees (Path != ProjectRoot).
 	worktree := ""
-	if inGroup && p.ShortPath != "" && p.Path != p.ProjectRoot {
+	if p.ShortPath != "" && p.Path != p.ProjectRoot {
 		worktree = p.ShortPath
 	}
 
@@ -296,11 +295,19 @@ func renderPaneRow(p *agent.Pane, selected bool, width int, inGroup bool) string
 	}
 	remaining := middleAvail - dw(winLabel)
 
-	// Worktree name takes whatever space is left after the window label, but
-	// reserves room for a 2-space separator. If too tight, drop it.
+	// Worktree name takes whatever space is left after the window label.
+	// When panes share a project root, align their worktree labels by
+	// padding the separator so every window label consumes the same width.
+	sepW := 2
+	if targetW, ok := m.projectWinWidth[p.ProjectRoot]; ok && targetW > dw(winLabel) {
+		aligned := 2 + targetW - dw(winLabel)
+		if remaining >= aligned+2 {
+			sepW = aligned
+		}
+	}
+
 	worktreeRendered := ""
-	if worktree != "" && remaining >= 4 {
-		sepW := 2
+	if worktree != "" && remaining >= sepW+2 {
 		avail := remaining - sepW
 		if dw(worktree) > avail {
 			worktree = truncate(worktree, avail)
@@ -331,7 +338,11 @@ func renderPaneRow(p *agent.Pane, selected bool, width int, inGroup bool) string
 		return selectedStyle.Render(prefix) + icon + selectedStyle.Render(body)
 	}
 
-	line := icons.text.Render(prefix) + icon + icons.text.Render(" "+winLabel)
+	winStyle := icons.text
+	if !p.Stashed {
+		winStyle = providerStyle(p.Provider, icons.text)
+	}
+	line := icons.text.Render(prefix) + icon + icons.text.Render(" ") + winStyle.Render(winLabel)
 	if worktreeRendered != "" {
 		line += icons.dim.Render(worktreeRendered)
 	}

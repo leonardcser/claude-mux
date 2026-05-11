@@ -42,6 +42,8 @@ type Pane struct {
 	WindowActive       bool
 	LastActive         time.Time
 	Stashed            bool
+	Order              int    // position in tmux list-panes output
+	Provider           string // resolved agent provider name (claude, codex, kimi, etc.)
 }
 
 // EnrichPanes populates workspace metadata (ShortPath, GitBranch, GitDirty,

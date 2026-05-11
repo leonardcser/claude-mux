@@ -116,6 +116,8 @@ func fetchPanes() ([]Pane, error) {
 			PID:          r.pid,
 			Status:       StatusIdle,
 			WindowActive: r.windowFocused,
+			Order:        i,
+			Provider:     r.cmd,
 		}
 	}
 	return panes, nil

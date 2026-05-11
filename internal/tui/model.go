@@ -86,6 +86,7 @@ type Model struct {
 	tmuxSession        string
 	state              agent.State
 	refreshCount       int
+	projectWinWidth    map[string]int
 }
 
 func NewModel(tmuxSession string) Model {
@@ -118,6 +119,7 @@ func NewModel(tmuxSession string) Model {
 				Pane:       pane,
 				Path:       cp.Path,
 				Stashed:    cp.Stashed,
+				Provider:   cp.Provider,
 			})
 			if cp.LastActive != nil {
 				lastActive[id] = *cp.LastActive
@@ -171,80 +173,73 @@ func NewModel(tmuxSession string) Model {
 }
 
 // rebuildItems builds the flat display list from the pane map.
-// Sorts by (stashed, projectRoot, path, target) and inserts project / worktree
-// headers. A project with multiple worktrees gets a project group header
-// followed by per-worktree subheaders; single-path projects get the original
-// flat workspace header.
+// Preserves tmux list-panes order (non-stashed first, then stashed).
+// Projects that have worktrees get a KindProjectGroup header (showing the
+// root project name); single-path projects get KindWorkspace headers.
 func (m *Model) rebuildItems() {
 	sorted := make([]*agent.Pane, 0, len(m.panes))
+	groupedProjects := make(map[string]bool)
 	for _, p := range m.panes {
 		sorted = append(sorted, p)
-	}
-	projectKey := func(p *agent.Pane) string {
-		if p.ProjectRoot != "" {
-			return p.ProjectRoot
+		if p.ProjectRoot != "" && p.Path != p.ProjectRoot {
+			groupedProjects[p.ProjectRoot] = true
 		}
-		return p.Path
 	}
 	sort.Slice(sorted, func(i, j int) bool {
 		if sorted[i].Stashed != sorted[j].Stashed {
 			return !sorted[i].Stashed
 		}
-		if ki, kj := projectKey(sorted[i]), projectKey(sorted[j]); ki != kj {
-			return ki < kj
-		}
-		if sorted[i].Path != sorted[j].Path {
-			return sorted[i].Path < sorted[j].Path
+		if sorted[i].Order != sorted[j].Order {
+			return sorted[i].Order < sorted[j].Order
 		}
 		return sorted[i].Target < sorted[j].Target
 	})
 
-	// A project is "grouped" if any of its panes lives outside the main
-	// repo (i.e. in a worktree). The decision is global so that stashing
-	// only the worktree pane still keeps the project-name header instead of
-	// collapsing to the worktree's basename.
-	groupedProjects := make(map[string]bool)
+	// Pre-compute the max window-label width per project so worktree labels
+	// in the same project line up vertically.
+	projectWinWidth := make(map[string]int)
 	for _, p := range sorted {
-		if p.ProjectRoot != "" && p.Path != p.ProjectRoot {
-			groupedProjects[projectKey(p)] = true
+		if groupedProjects[p.ProjectRoot] {
+			label := p.Window + ":" + p.WindowName
+			if p.WindowName == "" {
+				label = p.Session + ":" + p.Window
+			}
+			if w := lipgloss.Width(label); w > projectWinWidth[p.ProjectRoot] {
+				projectWinWidth[p.ProjectRoot] = w
+			}
 		}
 	}
+	m.projectWinWidth = projectWinWidth
 
-	type bucketKey struct {
-		stashed bool
-		project string
-	}
 	var items []TreeItem
-	var prevBucket bucketKey
 	prevPath := ""
+	prevProject := ""
 	inStashed := false
-	first := true
 	for _, p := range sorted {
-		bk := bucketKey{p.Stashed, projectKey(p)}
 		if p.Stashed && !inStashed {
 			inStashed = true
 			items = append(items,
 				TreeItem{Kind: KindSectionHeader},
 				TreeItem{Kind: KindSectionHeader, HeaderTitle: "stashed"},
 			)
-			prevBucket = bucketKey{}
 			prevPath = ""
+			prevProject = ""
 		}
 
-		grouped := groupedProjects[projectKey(p)]
-		if first || bk != prevBucket {
-			if grouped {
+		if groupedProjects[p.ProjectRoot] {
+			if p.ProjectRoot != prevProject {
 				items = append(items, TreeItem{Kind: KindProjectGroup, PaneID: p.PaneID})
+				prevProject = p.ProjectRoot
 			}
-			prevBucket = bk
-			prevPath = ""
-			first = false
+			items = append(items, TreeItem{Kind: KindPane, PaneID: p.PaneID})
+		} else {
+			if p.Path != prevPath {
+				prevPath = p.Path
+				items = append(items, TreeItem{Kind: KindWorkspace, PaneID: p.PaneID})
+			}
+			items = append(items, TreeItem{Kind: KindPane, PaneID: p.PaneID})
+			prevProject = ""
 		}
-		if !grouped && p.Path != prevPath {
-			prevPath = p.Path
-			items = append(items, TreeItem{Kind: KindWorkspace, PaneID: p.PaneID})
-		}
-		items = append(items, TreeItem{Kind: KindPane, PaneID: p.PaneID, InGroup: grouped})
 	}
 	m.items = items
 }

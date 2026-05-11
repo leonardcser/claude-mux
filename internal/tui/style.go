@@ -10,6 +10,13 @@ type iconSet struct {
 	dim       lipgloss.Style
 }
 
+func providerStyle(provider string, fallback lipgloss.Style) lipgloss.Style {
+	if c, ok := providerColors[provider]; ok {
+		return lipgloss.NewStyle().Foreground(c)
+	}
+	return fallback
+}
+
 var (
 	// Tree items
 	selectedStyle = lipgloss.NewStyle().
@@ -50,6 +57,17 @@ var (
 			Width(8)
 	helpDescStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8"))
+
+	// Provider colors
+	providerColors = map[string]lipgloss.Color{
+		"claude":   lipgloss.Color("#D97706"),
+		"codex":    lipgloss.Color("#D1D5DB"),
+		"gemini":   lipgloss.Color("#10B981"),
+		"kimi":     lipgloss.Color("#0077B6"),
+		"opencode": lipgloss.Color("#06B6D4"),
+		"ralph":    lipgloss.Color("#F43F5E"),
+		"smelt":    lipgloss.Color("#EAB308"),
+	}
 
 	// Error
 	errStyle = lipgloss.NewStyle().
